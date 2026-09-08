@@ -20,9 +20,15 @@ threshold alerts on a dashboard.
    and checks it against the thresholds in `src/alertRules.js`.
 4. The `/` dashboard polls `/api/metrics/latest`, `/api/alerts`, and
    `/api/metrics/history` every 10s to render a line chart per
-   resource/source/metric series (15m/1h/6h/24h range selector, via
-   Chart.js), plus current values and recent threshold breaches. Breaches
-   are also logged to the dyno's console (`console.warn`).
+   resource/source/metric series (range selector from 15m up to 90 days,
+   via Chart.js), plus current values and recent threshold breaches.
+   Breaches are also logged to the dyno's console (`console.warn`).
+   A dyno dropdown (populated from `/api/dynos`) filters the dyno-type
+   charts down to one instance (`web.1`, `web.2`, ...) at a time; it has
+   no effect on Postgres/Redis/Kafka charts, which aren't tied to a dyno.
+   Longer ranges are downsampled server-side (time-bucketed averages,
+   ~300 points per series) so a 90-day chart costs about the same to
+   query and render as a 15-minute one.
 
 Exact metric names/units vary by add-on and plan — the parser stores
 whatever `sample#key=value` pairs are present rather than hardcoding an
@@ -90,6 +96,16 @@ Edit `src/alertRules.js` — each rule matches a `resourceType` and a
 `metricName` pattern, and fires when the value crosses `threshold` in
 the given `operator` direction. Defaults are illustrative; adjust to your
 dyno size and workload.
+
+## Data retention
+
+Raw metric rows are pruned on a daily timer (and once at boot) to keep
+Postgres storage bounded even with the 90-day dashboard range. Default
+retention is 95 days (5 days of slack past the longest selectable range);
+override with the `RETENTION_DAYS` config var. Storage still grows with
+the number of monitored metrics/sources between prunes, so a very busy
+app or add-on tier that emits many distinct `sample#` keys will use more
+space than a quiet one — lower `RETENTION_DAYS` if that becomes an issue.
 
 ## Known limitations
 

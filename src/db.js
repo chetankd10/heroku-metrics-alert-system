@@ -73,16 +73,57 @@ async function recentAlerts(limit = 50) {
   return rows;
 }
 
-async function metricsSince(minutes) {
+// Target roughly this many points per series regardless of the requested
+// range, by averaging into time buckets - keeps a 90-day chart as cheap to
+// render as a 15-minute one instead of shipping every raw row to the client.
+const TARGET_POINTS_PER_SERIES = 300;
+
+async function metricsSince(minutes, dynoSource) {
+  const bucketSeconds = Math.max(1, Math.ceil((minutes * 60) / TARGET_POINTS_PER_SERIES));
+  const params = [minutes, bucketSeconds];
+  let dynoClause = '';
+  if (dynoSource) {
+    params.push(dynoSource);
+    // Only dyno-type rows are filtered by the selected dyno; other
+    // resource types (postgres/redis/kafka) aren't tied to a dyno instance.
+    dynoClause = `AND (resource_type != 'dyno' OR source = $3)`;
+  }
+
   const { rows } = await pool.query(
-    `SELECT resource_type, source, metric_name, metric_unit, metric_value, recorded_at
+    `SELECT resource_type, source, metric_name, metric_unit,
+        to_timestamp(floor(extract(epoch FROM recorded_at) / $2) * $2) AS recorded_at,
+        avg(metric_value) AS metric_value
      FROM metrics
      WHERE recorded_at > now() - ($1 || ' minutes')::interval
-     ORDER BY recorded_at ASC
+     ${dynoClause}
+     GROUP BY 1, 2, 3, 4, 5
+     ORDER BY 5 ASC
      LIMIT 20000`,
-    [minutes]
+    params
   );
   return rows;
 }
 
-module.exports = { pool, init, insertMetric, insertAlert, latestMetrics, recentAlerts, metricsSince };
+async function distinctDynoSources() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT source FROM metrics WHERE resource_type = 'dyno' ORDER BY source`
+  );
+  return rows.map((r) => r.source);
+}
+
+async function pruneOldMetrics(days) {
+  await pool.query(`DELETE FROM metrics WHERE recorded_at < now() - ($1 || ' days')::interval`, [days]);
+  await pool.query(`DELETE FROM alerts WHERE triggered_at < now() - ($1 || ' days')::interval`, [days]);
+}
+
+module.exports = {
+  pool,
+  init,
+  insertMetric,
+  insertAlert,
+  latestMetrics,
+  recentAlerts,
+  metricsSince,
+  distinctDynoSources,
+  pruneOldMetrics,
+};

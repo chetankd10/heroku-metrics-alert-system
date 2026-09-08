@@ -28,9 +28,9 @@ router.get('/', (req, res) => {
   .resource-redis { color: #c53030; }
   .resource-kafka { color: #b7791f; }
   .empty { color: #888; font-style: italic; }
-  .range-controls { margin-bottom: 1rem; }
-  .range-controls button { padding: 0.3rem 0.8rem; margin-right: 0.4rem; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-  .range-controls button.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+  .range-controls { margin-bottom: 1rem; display: flex; gap: 1.5rem; align-items: center; }
+  .range-controls label { font-size: 0.85rem; margin-right: 0.4rem; }
+  .range-controls select { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; }
   #charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; }
   .chart-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem; }
   .chart-card h3 { margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600; }
@@ -42,10 +42,24 @@ router.get('/', (req, res) => {
 
   <h2>Metric history</h2>
   <div class="range-controls">
-    <button data-minutes="15">15m</button>
-    <button data-minutes="60" class="active">1h</button>
-    <button data-minutes="360">6h</button>
-    <button data-minutes="1440">24h</button>
+    <span>
+      <label for="range-select">Range</label>
+      <select id="range-select">
+        <option value="15">15m</option>
+        <option value="60" selected>1h</option>
+        <option value="360">6h</option>
+        <option value="1440">24h</option>
+        <option value="10080">7d</option>
+        <option value="43200">30d</option>
+        <option value="129600">90d</option>
+      </select>
+    </span>
+    <span>
+      <label for="dyno-select">Dyno</label>
+      <select id="dyno-select">
+        <option value="">All dynos</option>
+      </select>
+    </span>
   </div>
   <div id="charts-grid">
     <p class="empty" id="charts-empty">Loading...</p>
@@ -127,6 +141,7 @@ async function refreshAlerts() {
 }
 
 let rangeMinutes = 60;
+let dynoFilter = '';
 const charts = new Map(); // seriesKey -> Chart instance
 
 function seriesKey(row) {
@@ -137,8 +152,32 @@ function seriesLabel(row) {
   return row.resource_type + ' / ' + row.source + ' / ' + row.metric_name + (row.metric_unit ? ' (' + row.metric_unit + ')' : '');
 }
 
+function formatLabel(recordedAt, minutes) {
+  const d = new Date(recordedAt);
+  if (minutes > 1440) {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+async function refreshDynoOptions() {
+  const res = await fetch('/api/dynos');
+  const dynos = await res.json();
+  const select = document.getElementById('dyno-select');
+  const existing = new Set(Array.from(select.options).map((o) => o.value));
+  for (const dyno of dynos) {
+    if (existing.has(dyno)) continue;
+    const opt = document.createElement('option');
+    opt.value = dyno;
+    opt.textContent = dyno;
+    select.appendChild(opt);
+  }
+}
+
 async function refreshCharts() {
-  const res = await fetch('/api/metrics/history?minutes=' + rangeMinutes);
+  const params = new URLSearchParams({ minutes: String(rangeMinutes) });
+  if (dynoFilter) params.set('dyno', dynoFilter);
+  const res = await fetch('/api/metrics/history?' + params.toString());
   const rows = await res.json();
   const grid = document.getElementById('charts-grid');
   const emptyNotice = document.getElementById('charts-empty');
@@ -148,7 +187,7 @@ async function refreshCharts() {
     const key = seriesKey(row);
     if (!grouped.has(key)) grouped.set(key, { row, labels: [], values: [] });
     const entry = grouped.get(key);
-    entry.labels.push(new Date(row.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    entry.labels.push(formatLabel(row.recorded_at, rangeMinutes));
     entry.values.push(row.metric_value);
   }
 
@@ -209,21 +248,20 @@ function cssSafe(key) {
   return key.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-function setRange(minutes) {
-  rangeMinutes = minutes;
-  document.querySelectorAll('.range-controls button').forEach((btn) => {
-    btn.classList.toggle('active', parseInt(btn.dataset.minutes, 10) === minutes);
-  });
+document.getElementById('range-select').addEventListener('change', (e) => {
+  rangeMinutes = parseInt(e.target.value, 10);
   refreshCharts().catch(console.error);
-}
+});
 
-document.querySelectorAll('.range-controls button').forEach((btn) => {
-  btn.addEventListener('click', () => setRange(parseInt(btn.dataset.minutes, 10)));
+document.getElementById('dyno-select').addEventListener('change', (e) => {
+  dynoFilter = e.target.value;
+  refreshCharts().catch(console.error);
 });
 
 function refreshAll() {
   refreshMetrics().catch(console.error);
   refreshAlerts().catch(console.error);
+  refreshDynoOptions().catch(console.error);
   refreshCharts().catch(console.error);
 }
 

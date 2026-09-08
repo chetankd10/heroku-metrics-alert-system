@@ -57,6 +57,8 @@ app.use('/api', apiRoutes);
 app.use('/', dashboardRoutes);
 
 const port = process.env.PORT || 3000;
+const retentionDays = parseInt(process.env.RETENTION_DAYS, 10) || 95;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 db.init()
   .then(() => {
@@ -66,6 +68,11 @@ db.init()
         console.warn('DRAIN_TOKEN is not set - /log-drain is unauthenticated. Set it before deploying.');
       }
     });
+
+    db.pruneOldMetrics(retentionDays).catch((err) => console.error('Retention prune failed:', err));
+    setInterval(() => {
+      db.pruneOldMetrics(retentionDays).catch((err) => console.error('Retention prune failed:', err));
+    }, ONE_DAY_MS);
   })
   .catch((err) => {
     console.error('Failed to initialize database:', err);
