@@ -2,6 +2,10 @@ const express = require('express');
 
 const router = express.Router();
 
+// Pinned Chart.js build + SRI hash - do not swap to an unpinned "latest" URL.
+const CHARTJS_SRC = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';
+const CHARTJS_INTEGRITY = 'sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt';
+
 router.get('/', (req, res) => {
   const appName = process.env.MONITORED_APP_NAME || 'unnamed-app';
 
@@ -10,9 +14,11 @@ router.get('/', (req, res) => {
 <head>
 <meta charset="utf-8">
 <title>Heroku Metrics - ${appName}</title>
+<script src="${CHARTJS_SRC}" integrity="${CHARTJS_INTEGRITY}" crossorigin="anonymous"></script>
 <style>
   body { font-family: -apple-system, sans-serif; margin: 2rem; color: #222; }
   h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
   table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
   th, td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; }
   th { background: #f5f5f5; }
@@ -22,10 +28,28 @@ router.get('/', (req, res) => {
   .resource-redis { color: #c53030; }
   .resource-kafka { color: #b7791f; }
   .empty { color: #888; font-style: italic; }
+  .range-controls { margin-bottom: 1rem; }
+  .range-controls button { padding: 0.3rem 0.8rem; margin-right: 0.4rem; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+  .range-controls button.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+  #charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; }
+  .chart-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem; }
+  .chart-card h3 { margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600; }
+  .chart-card canvas { max-height: 220px; }
 </style>
 </head>
 <body>
   <h1>Heroku Metrics &mdash; ${appName}</h1>
+
+  <h2>Metric history</h2>
+  <div class="range-controls">
+    <button data-minutes="15">15m</button>
+    <button data-minutes="60" class="active">1h</button>
+    <button data-minutes="360">6h</button>
+    <button data-minutes="1440">24h</button>
+  </div>
+  <div id="charts-grid">
+    <p class="empty" id="charts-empty">Loading...</p>
+  </div>
 
   <h2>Latest metrics</h2>
   <table id="metrics-table">
@@ -102,9 +126,105 @@ async function refreshAlerts() {
   }
 }
 
+let rangeMinutes = 60;
+const charts = new Map(); // seriesKey -> Chart instance
+
+function seriesKey(row) {
+  return row.resource_type + '::' + row.source + '::' + row.metric_name;
+}
+
+function seriesLabel(row) {
+  return row.resource_type + ' / ' + row.source + ' / ' + row.metric_name + (row.metric_unit ? ' (' + row.metric_unit + ')' : '');
+}
+
+async function refreshCharts() {
+  const res = await fetch('/api/metrics/history?minutes=' + rangeMinutes);
+  const rows = await res.json();
+  const grid = document.getElementById('charts-grid');
+  const emptyNotice = document.getElementById('charts-empty');
+
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = seriesKey(row);
+    if (!grouped.has(key)) grouped.set(key, { row, labels: [], values: [] });
+    const entry = grouped.get(key);
+    entry.labels.push(new Date(row.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    entry.values.push(row.metric_value);
+  }
+
+  if (grouped.size === 0) {
+    if (emptyNotice) emptyNotice.textContent = 'No metrics received yet in this time range.';
+    return;
+  }
+  if (emptyNotice) emptyNotice.remove();
+
+  for (const key of Array.from(charts.keys())) {
+    if (!grouped.has(key)) {
+      charts.get(key).destroy();
+      document.getElementById('card-' + cssSafe(key))?.remove();
+      charts.delete(key);
+    }
+  }
+
+  for (const [key, { row, labels, values }] of grouped) {
+    let chart = charts.get(key);
+    if (!chart) {
+      const card = document.createElement('div');
+      card.className = 'chart-card';
+      card.id = 'card-' + cssSafe(key);
+
+      const title = document.createElement('h3');
+      title.textContent = seriesLabel(row);
+      card.appendChild(title);
+
+      const canvas = document.createElement('canvas');
+      card.appendChild(canvas);
+      grid.appendChild(card);
+
+      chart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{ data: values, borderColor: '#2b6cb0', backgroundColor: 'rgba(43,108,176,0.1)', pointRadius: 0, borderWidth: 1.5, tension: 0.15 }],
+        },
+        options: {
+          animation: false,
+          scales: {
+            x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } },
+            y: { beginAtZero: true },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+      charts.set(key, chart);
+    } else {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = values;
+      chart.update('none');
+    }
+  }
+}
+
+function cssSafe(key) {
+  return key.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function setRange(minutes) {
+  rangeMinutes = minutes;
+  document.querySelectorAll('.range-controls button').forEach((btn) => {
+    btn.classList.toggle('active', parseInt(btn.dataset.minutes, 10) === minutes);
+  });
+  refreshCharts().catch(console.error);
+}
+
+document.querySelectorAll('.range-controls button').forEach((btn) => {
+  btn.addEventListener('click', () => setRange(parseInt(btn.dataset.minutes, 10)));
+});
+
 function refreshAll() {
   refreshMetrics().catch(console.error);
   refreshAlerts().catch(console.error);
+  refreshCharts().catch(console.error);
 }
 
 refreshAll();

@@ -73,4 +73,16 @@ async function recentAlerts(limit = 50) {
   return rows;
 }
 
-module.exports = { pool, init, insertMetric, insertAlert, latestMetrics, recentAlerts };
+async function metricsSince(minutes) {
+  const { rows } = await pool.query(
+    `SELECT resource_type, source, metric_name, metric_unit, metric_value, recorded_at
+     FROM metrics
+     WHERE recorded_at > now() - ($1 || ' minutes')::interval
+     ORDER BY recorded_at ASC
+     LIMIT 20000`,
+    [minutes]
+  );
+  return rows;
+}
+
+module.exports = { pool, init, insertMetric, insertAlert, latestMetrics, recentAlerts, metricsSince };
