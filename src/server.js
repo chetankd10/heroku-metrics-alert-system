@@ -26,13 +26,20 @@ app.post(
   express.raw({ type: '*/*', limit: '10mb' }),
   async (req, res) => {
     try {
+      // Heroku's syslog frames don't carry the real app name (the APPNAME
+      // field is just the literal "app" or "heroku"), so multi-app setups
+      // must pass ?app=<name> on each app's own drain URL. Falls back to
+      // MONITORED_APP_NAME so existing single-app drains keep working.
+      const drainAppName = typeof req.query.app === 'string' && req.query.app.trim()
+        ? req.query.app.trim()
+        : appName;
       const entries = parseLogDrainBody(req.body);
 
       for (const entry of entries) {
         const metrics = extractMetrics(entry.message, entry.procId);
 
         for (const metric of metrics) {
-          await db.insertMetric(appName, metric, entry.message);
+          await db.insertMetric(drainAppName, metric, entry.message);
 
           const rule = alertRules.evaluate(metric);
           if (rule) {

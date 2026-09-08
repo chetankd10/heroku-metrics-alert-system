@@ -1,9 +1,9 @@
 # Heroku Metrics Alert System
 
-Monitors dyno, Postgres, Redis, and Kafka metrics for a Heroku app by
-receiving that app's log drain, parsing the `sample#key=value` metric
-lines Heroku and its add-ons emit, storing them in Postgres, and raising
-threshold alerts on a dashboard.
+Monitors dyno, Postgres, Redis, and Kafka metrics for one or more Heroku
+apps by receiving each app's log drain, parsing the `sample#key=value`
+metric lines Heroku and its add-ons emit, storing them in Postgres, and
+raising threshold alerts on a dashboard.
 
 ## How it works
 
@@ -73,11 +73,14 @@ npm test
    heroku config:set MONITORED_APP_NAME=your-monitored-app -a your-alert-system-app
    ```
 3. On the **app you want to monitor**, enable dyno metric logging and
-   attach the drain:
+   attach the drain, including a `?app=<name>` param that identifies
+   which app the payload came from (Heroku's syslog `APPNAME` field is
+   always just the literal string `app`/`heroku`, so this query param is
+   the only reliable way to tell apps apart on a shared drain endpoint):
    ```bash
    heroku labs:enable log-runtime-metrics -a your-monitored-app
    heroku drains:add \
-     "https://your-alert-system-app.herokuapp.com/log-drain?token=<DRAIN_TOKEN>" \
+     "https://your-alert-system-app.herokuapp.com/log-drain?token=<DRAIN_TOKEN>&app=your-monitored-app" \
      -a your-monitored-app
    ```
 4. If the monitored app has Postgres/Redis/Kafka add-ons, check that
@@ -85,14 +88,38 @@ npm test
    default once a drain is attached; some require a plan tier or a
    `heroku <addon>:` config command).
 
-## Extending to a whole team/account
+## Monitoring more than one app
 
-This starter targets a single named app. To cover every app in a
-Heroku team, add a script that calls the [Platform API](https://devcenter.heroku.com/articles/platform-api-reference)
-(`GET /teams/{team}/apps`, then `POST /apps/{app}/log-drains` for each) to
-attach this same drain URL/token to every app, and tag incoming metrics
-by the syslog `appName` field (currently only used for display) instead
-of the single `MONITORED_APP_NAME` env var.
+A single deployment of this service can monitor any number of Heroku
+apps at once:
+
+1. Repeat step 3 above for every additional app, each with its own
+   `?app=<name>` value (they can all point at the same
+   `your-alert-system-app.herokuapp.com/log-drain` URL and share the same
+   `DRAIN_TOKEN`). `MONITORED_APP_NAME` only matters as a fallback label
+   for a drain hit that omits `?app=`, so you don't need to change it
+   when adding more apps.
+2. The dashboard's **App** dropdown lists every app that has sent data
+   (grouped under "Monitored"), plus — if `HEROKU_API_KEY` is set — every
+   other app your account/teams can see, grouped as "Personal (not
+   monitored)" or "Team: &lt;name&gt; (not monitored)", as a reminder of
+   what you could add a drain for next. Selecting an app filters every
+   panel (charts, dyno list, latest metrics, alerts) to just that app;
+   the default "All monitored apps" view shows everything together, with
+   an "App" column on each table and series label.
+3. To enable the "not monitored" discovery groups, set `HEROKU_API_KEY`
+   to a Heroku OAuth token. Mint one scoped to **read-only** so this
+   service can never modify any app, including ones it doesn't monitor:
+   ```bash
+   heroku authorizations:create --scope read -d "your-alert-system-app read-only API discovery"
+   heroku config:set HEROKU_API_KEY=<token from the previous command> -a your-alert-system-app
+   ```
+   This service only ever issues `GET` requests against the Heroku
+   Platform API (just to list apps) — it never attaches, removes, or
+   otherwise writes to a log drain or any other app setting on your
+   behalf. Attaching drains (step 3 above) is always a manual step you
+   run yourself. If `HEROKU_API_KEY` is unset, app discovery is skipped
+   entirely and the dropdown only shows apps that already have data.
 
 ## Tuning alerts
 

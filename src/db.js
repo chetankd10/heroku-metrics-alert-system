@@ -21,6 +21,7 @@ async function init() {
 
     CREATE INDEX IF NOT EXISTS idx_metrics_recorded_at ON metrics (recorded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_metrics_lookup ON metrics (resource_type, source, metric_name, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_metrics_app ON metrics (app_name, recorded_at DESC);
 
     CREATE TABLE IF NOT EXISTS alerts (
       id BIGSERIAL PRIMARY KEY,
@@ -55,20 +56,36 @@ async function insertAlert(appName, metric, rule) {
   );
 }
 
-async function latestMetrics() {
-  const { rows } = await pool.query(`
-    SELECT DISTINCT ON (resource_type, source, metric_name)
-      resource_type, source, metric_name, metric_value, metric_unit, recorded_at
+async function latestMetrics(appName) {
+  const params = [];
+  let appClause = '';
+  if (appName) {
+    params.push(appName);
+    appClause = `WHERE app_name = $1`;
+  }
+  // app_name is part of the DISTINCT ON / ORDER BY key so two apps that both
+  // happen to log e.g. dyno/web.1/load_avg_1m don't collapse into one row.
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (app_name, resource_type, source, metric_name)
+      app_name, resource_type, source, metric_name, metric_value, metric_unit, recorded_at
     FROM metrics
-    ORDER BY resource_type, source, metric_name, recorded_at DESC
-  `);
+    ${appClause}
+    ORDER BY app_name, resource_type, source, metric_name, recorded_at DESC`,
+    params
+  );
   return rows;
 }
 
-async function recentAlerts(limit = 50) {
+async function recentAlerts(limit = 50, appName) {
+  const params = [limit];
+  let appClause = '';
+  if (appName) {
+    params.push(appName);
+    appClause = `WHERE app_name = $2`;
+  }
   const { rows } = await pool.query(
-    `SELECT * FROM alerts ORDER BY triggered_at DESC LIMIT $1`,
-    [limit]
+    `SELECT * FROM alerts ${appClause} ORDER BY triggered_at DESC LIMIT $1`,
+    params
   );
   return rows;
 }
@@ -78,62 +95,85 @@ async function recentAlerts(limit = 50) {
 // render as a 15-minute one instead of shipping every raw row to the client.
 const TARGET_POINTS_PER_SERIES = 300;
 
-async function metricsSince(minutes, dynoSource) {
+async function metricsSince(minutes, dynoSource, appName) {
   const bucketSeconds = Math.max(1, Math.ceil((minutes * 60) / TARGET_POINTS_PER_SERIES));
   const params = [minutes, bucketSeconds];
-  let dynoClause = '';
+  let clauses = '';
   if (dynoSource) {
     params.push(dynoSource);
     // Only dyno-type rows are filtered by the selected dyno; other
     // resource types (postgres/redis/kafka) aren't tied to a dyno instance.
-    dynoClause = `AND (resource_type != 'dyno' OR source = $3)`;
+    clauses += ` AND (resource_type != 'dyno' OR source = $${params.length})`;
+  }
+  if (appName) {
+    params.push(appName);
+    clauses += ` AND app_name = $${params.length}`;
   }
 
+  // app_name is part of the GROUP BY so two apps with the same
+  // resource_type/source/metric_name (e.g. dyno/web.1/load_avg_1m) don't get
+  // averaged together into one misleading series.
   const { rows } = await pool.query(
-    `SELECT resource_type, source, metric_name, metric_unit,
+    `SELECT app_name, resource_type, source, metric_name, metric_unit,
         to_timestamp(floor(extract(epoch FROM recorded_at) / $2) * $2) AS recorded_at,
         avg(metric_value) AS metric_value
      FROM metrics
      WHERE recorded_at > now() - ($1 || ' minutes')::interval
-     ${dynoClause}
-     GROUP BY 1, 2, 3, 4, 5
-     ORDER BY 5 ASC
+     ${clauses}
+     GROUP BY 1, 2, 3, 4, 5, 6
+     ORDER BY 6 ASC
      LIMIT 20000`,
     params
   );
   return rows;
 }
 
-async function metricsBetween(startTime, endTime, dynoSource) {
+async function metricsBetween(startTime, endTime, dynoSource, appName) {
   const spanSeconds = Math.max(1, (endTime.getTime() - startTime.getTime()) / 1000);
   const bucketSeconds = Math.max(1, Math.ceil(spanSeconds / TARGET_POINTS_PER_SERIES));
   const params = [startTime, endTime, bucketSeconds];
-  let dynoClause = '';
+  let clauses = '';
   if (dynoSource) {
     params.push(dynoSource);
-    dynoClause = `AND (resource_type != 'dyno' OR source = $4)`;
+    clauses += ` AND (resource_type != 'dyno' OR source = $${params.length})`;
+  }
+  if (appName) {
+    params.push(appName);
+    clauses += ` AND app_name = $${params.length}`;
   }
 
   const { rows } = await pool.query(
-    `SELECT resource_type, source, metric_name, metric_unit,
+    `SELECT app_name, resource_type, source, metric_name, metric_unit,
         to_timestamp(floor(extract(epoch FROM recorded_at) / $3) * $3) AS recorded_at,
         avg(metric_value) AS metric_value
      FROM metrics
      WHERE recorded_at >= $1 AND recorded_at <= $2
-     ${dynoClause}
-     GROUP BY 1, 2, 3, 4, 5
-     ORDER BY 5 ASC
+     ${clauses}
+     GROUP BY 1, 2, 3, 4, 5, 6
+     ORDER BY 6 ASC
      LIMIT 20000`,
     params
   );
   return rows;
 }
 
-async function distinctDynoSources() {
+async function distinctDynoSources(appName) {
+  const params = [];
+  let appClause = '';
+  if (appName) {
+    params.push(appName);
+    appClause = `AND app_name = $1`;
+  }
   const { rows } = await pool.query(
-    `SELECT DISTINCT source FROM metrics WHERE resource_type = 'dyno' ORDER BY source`
+    `SELECT DISTINCT source FROM metrics WHERE resource_type = 'dyno' ${appClause} ORDER BY source`,
+    params
   );
   return rows.map((r) => r.source);
+}
+
+async function distinctAppNames() {
+  const { rows } = await pool.query(`SELECT DISTINCT app_name FROM metrics ORDER BY app_name`);
+  return rows.map((r) => r.app_name);
 }
 
 async function pruneOldMetrics(days) {
@@ -151,5 +191,6 @@ module.exports = {
   metricsSince,
   metricsBetween,
   distinctDynoSources,
+  distinctAppNames,
   pruneOldMetrics,
 };

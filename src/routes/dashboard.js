@@ -41,10 +41,16 @@ router.get('/', (req, res) => {
 </style>
 </head>
 <body>
-  <h1>Heroku Metrics &mdash; ${appName}</h1>
+  <h1>Heroku Metrics Dashboard</h1>
 
   <h2>Metric history</h2>
   <div class="range-controls">
+    <span>
+      <label for="app-select">App</label>
+      <select id="app-select">
+        <option value="">All monitored apps</option>
+      </select>
+    </span>
     <span>
       <label for="range-select">Range</label>
       <select id="range-select">
@@ -78,14 +84,14 @@ router.get('/', (req, res) => {
 
   <h2>Latest metrics</h2>
   <table id="metrics-table">
-    <thead><tr><th>Resource</th><th>Source</th><th>Metric</th><th>Value</th><th>Unit</th><th>Recorded</th></tr></thead>
-    <tbody><tr><td class="empty" colspan="6">Loading...</td></tr></tbody>
+    <thead><tr><th>App</th><th>Resource</th><th>Source</th><th>Metric</th><th>Value</th><th>Unit</th><th>Recorded</th></tr></thead>
+    <tbody><tr><td class="empty" colspan="7">Loading...</td></tr></tbody>
   </table>
 
   <h2>Recent alerts</h2>
   <table id="alerts-table">
-    <thead><tr><th>Resource</th><th>Source</th><th>Metric</th><th>Value</th><th>Threshold</th><th>Message</th><th>Triggered</th></tr></thead>
-    <tbody><tr><td class="empty" colspan="7">Loading...</td></tr></tbody>
+    <thead><tr><th>App</th><th>Resource</th><th>Source</th><th>Metric</th><th>Value</th><th>Threshold</th><th>Message</th><th>Triggered</th></tr></thead>
+    <tbody><tr><td class="empty" colspan="8">Loading...</td></tr></tbody>
   </table>
 
 <script>
@@ -96,21 +102,25 @@ function td(text) {
 }
 
 async function refreshMetrics() {
-  const res = await fetch('/api/metrics/latest');
+  const params = new URLSearchParams();
+  if (appFilter) params.set('app', appFilter);
+  const res = await fetch('/api/metrics/latest' + (appFilter ? '?' + params.toString() : ''));
   const rows = await res.json();
   const tbody = document.querySelector('#metrics-table tbody');
   tbody.innerHTML = '';
   if (rows.length === 0) {
     const tr = document.createElement('tr');
-    const cell = td('No metrics received yet. Confirm the log drain is attached.');
+    const label = appFilter ? '"' + appFilter + '"' : 'this app';
+    const cell = td('No metrics received yet for ' + label + '. Confirm the log drain is attached.');
     cell.className = 'empty';
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     tr.appendChild(cell);
     tbody.appendChild(tr);
     return;
   }
   for (const row of rows) {
     const tr = document.createElement('tr');
+    tr.appendChild(td(row.app_name));
     const resourceCell = td(row.resource_type);
     resourceCell.className = 'resource-' + row.resource_type;
     tr.appendChild(resourceCell);
@@ -124,7 +134,9 @@ async function refreshMetrics() {
 }
 
 async function refreshAlerts() {
-  const res = await fetch('/api/alerts');
+  const params = new URLSearchParams();
+  if (appFilter) params.set('app', appFilter);
+  const res = await fetch('/api/alerts' + (appFilter ? '?' + params.toString() : ''));
   const rows = await res.json();
   const tbody = document.querySelector('#alerts-table tbody');
   tbody.innerHTML = '';
@@ -132,7 +144,7 @@ async function refreshAlerts() {
     const tr = document.createElement('tr');
     const cell = td('No alerts triggered yet.');
     cell.className = 'empty';
-    cell.colSpan = 7;
+    cell.colSpan = 8;
     tr.appendChild(cell);
     tbody.appendChild(tr);
     return;
@@ -140,6 +152,7 @@ async function refreshAlerts() {
   for (const row of rows) {
     const tr = document.createElement('tr');
     tr.className = 'alert-row';
+    tr.appendChild(td(row.app_name));
     tr.appendChild(td(row.resource_type));
     tr.appendChild(td(row.source));
     tr.appendChild(td(row.metric_name));
@@ -154,14 +167,15 @@ async function refreshAlerts() {
 let rangeMinutes = 60;
 let customRange = null; // { start: Date, end: Date } when the "Custom" range is active
 let dynoFilter = '';
+let appFilter = '';
 const charts = new Map(); // seriesKey -> Chart instance
 
 function seriesKey(row) {
-  return row.resource_type + '::' + row.source + '::' + row.metric_name;
+  return row.app_name + '::' + row.resource_type + '::' + row.source + '::' + row.metric_name;
 }
 
 function seriesLabel(row) {
-  return row.resource_type + ' / ' + row.source + ' / ' + row.metric_name + (row.metric_unit ? ' (' + row.metric_unit + ')' : '');
+  return row.app_name + ' / ' + row.resource_type + ' / ' + row.source + ' / ' + row.metric_name + (row.metric_unit ? ' (' + row.metric_unit + ')' : '');
 }
 
 function formatLabel(recordedAt, minutes) {
@@ -173,9 +187,17 @@ function formatLabel(recordedAt, minutes) {
 }
 
 async function refreshDynoOptions() {
-  const res = await fetch('/api/dynos');
+  const params = new URLSearchParams();
+  if (appFilter) params.set('app', appFilter);
+  const res = await fetch('/api/dynos' + (appFilter ? '?' + params.toString() : ''));
   const dynos = await res.json();
   const select = document.getElementById('dyno-select');
+  const valid = new Set(['', ...dynos]);
+  // Drop options that don't belong to the currently selected app (e.g. after
+  // switching apps) so stale dyno names from a previous app don't linger.
+  for (const opt of Array.from(select.options)) {
+    if (!valid.has(opt.value)) opt.remove();
+  }
   const existing = new Set(Array.from(select.options).map((o) => o.value));
   for (const dyno of dynos) {
     if (existing.has(dyno)) continue;
@@ -183,6 +205,49 @@ async function refreshDynoOptions() {
     opt.value = dyno;
     opt.textContent = dyno;
     select.appendChild(opt);
+  }
+}
+
+async function refreshAppOptions() {
+  const select = document.getElementById('app-select');
+  const previousValue = select.value;
+
+  const [monitoredApps, herokuApps] = await Promise.all([
+    fetch('/api/apps').then((r) => r.json()).catch(() => []),
+    fetch('/api/heroku/apps').then((r) => r.json()).catch(() => ({ enabled: false, personal: [], teams: {} })),
+  ]);
+
+  const monitored = new Set(monitoredApps);
+  select.innerHTML = '';
+  select.appendChild(new Option('All monitored apps', ''));
+
+  if (monitoredApps.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = 'Monitored';
+    for (const name of monitoredApps) group.appendChild(new Option(name, name));
+    select.appendChild(group);
+  }
+
+  if (herokuApps.enabled) {
+    const personalUnmonitored = (herokuApps.personal || []).filter((name) => !monitored.has(name));
+    if (personalUnmonitored.length > 0) {
+      const group = document.createElement('optgroup');
+      group.label = 'Personal (not monitored)';
+      for (const name of personalUnmonitored) group.appendChild(new Option(name, name));
+      select.appendChild(group);
+    }
+    for (const [teamName, apps] of Object.entries(herokuApps.teams || {})) {
+      const unmonitored = apps.filter((name) => !monitored.has(name));
+      if (unmonitored.length === 0) continue;
+      const group = document.createElement('optgroup');
+      group.label = 'Team: ' + teamName + ' (not monitored)';
+      for (const name of unmonitored) group.appendChild(new Option(name, name));
+      select.appendChild(group);
+    }
+  }
+
+  if (Array.from(select.options).some((o) => o.value === previousValue)) {
+    select.value = previousValue;
   }
 }
 
@@ -197,6 +262,7 @@ async function refreshCharts() {
     params.set('minutes', String(rangeMinutes));
   }
   if (dynoFilter) params.set('dyno', dynoFilter);
+  if (appFilter) params.set('app', appFilter);
   const res = await fetch('/api/metrics/history?' + params.toString());
   const rows = await res.json();
   const grid = document.getElementById('charts-grid');
@@ -212,7 +278,20 @@ async function refreshCharts() {
   }
 
   if (grouped.size === 0) {
-    if (emptyNotice) emptyNotice.textContent = 'No metrics received yet in this time range.';
+    for (const key of Array.from(charts.keys())) {
+      charts.get(key).destroy();
+      document.getElementById('card-' + cssSafe(key))?.remove();
+      charts.delete(key);
+    }
+    let notice = document.getElementById('charts-empty');
+    if (!notice) {
+      notice = document.createElement('p');
+      notice.id = 'charts-empty';
+      notice.className = 'empty';
+      grid.appendChild(notice);
+    }
+    const label = appFilter ? '"' + appFilter + '"' : 'this app';
+    notice.textContent = 'No metrics received yet for ' + label + ' in this time range.';
     return;
   }
   if (emptyNotice) emptyNotice.remove();
@@ -311,9 +390,17 @@ document.getElementById('dyno-select').addEventListener('change', (e) => {
   refreshCharts().catch(console.error);
 });
 
+document.getElementById('app-select').addEventListener('change', (e) => {
+  appFilter = e.target.value;
+  dynoFilter = ''; // dyno names from the previous app don't apply here
+  document.getElementById('dyno-select').value = '';
+  refreshAll();
+});
+
 function refreshAll() {
   refreshMetrics().catch(console.error);
   refreshAlerts().catch(console.error);
+  refreshAppOptions().catch(console.error);
   refreshDynoOptions().catch(console.error);
   refreshCharts().catch(console.error);
 }
