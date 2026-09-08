@@ -18,9 +18,11 @@ threshold alerts on a dashboard.
 3. This service parses each `sample#...` pair, classifies it by source
    (`dyno`, `postgres`, `redis`, `kafka`, `other`), stores it in Postgres,
    and checks it against the thresholds in `src/alertRules.js`.
-4. The `/` dashboard polls `/api/metrics/latest` and `/api/alerts` every
-   10s to show current values and recent threshold breaches. Breaches are
-   also logged to the dyno's console (`console.warn`).
+4. The `/` dashboard polls `/api/metrics/latest`, `/api/alerts`, and
+   `/api/metrics/history` every 10s to render a line chart per
+   resource/source/metric series (15m/1h/6h/24h range selector, via
+   Chart.js), plus current values and recent threshold breaches. Breaches
+   are also logged to the dyno's console (`console.warn`).
 
 Exact metric names/units vary by add-on and plan — the parser stores
 whatever `sample#key=value` pairs are present rather than hardcoding an
