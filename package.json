@@ -1,0 +1,19 @@
+{
+  "name": "heroku-metrics-alert-system",
+  "version": "1.0.0",
+  "description": "Ingests a Heroku log drain, extracts dyno/Postgres/Redis/Kafka metrics, stores them, and raises threshold alerts on a dashboard.",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/",
+    "simulate": "node scripts/simulate-logs.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "heroku-metrics-alert-system",
+  "description": "Receives a Heroku log drain and tracks dyno/Postgres/Redis/Kafka metrics with threshold alerts.",
+  "keywords": ["heroku", "monitoring", "metrics", "alerts"],
+  "addons": ["heroku-postgresql:essential-0"],
+  "env": {
+    "DRAIN_TOKEN": {
+      "description": "Shared secret required as a query param on the log drain URL (https://<app>.herokuapp.com/log-drain?token=...)",
+      "generator": "secret"
+    },
+    "MONITORED_APP_NAME": {
+      "description": "Name of the Heroku app being monitored (for display on the dashboard)",
+      "required": false
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  }
+}
