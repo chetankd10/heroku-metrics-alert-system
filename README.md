@@ -21,14 +21,18 @@ threshold alerts on a dashboard.
 4. The `/` dashboard polls `/api/metrics/latest`, `/api/alerts`, and
    `/api/metrics/history` every 10s to render a line chart per
    resource/source/metric series (range selector from 15m up to 90 days,
-   via Chart.js), plus current values and recent threshold breaches.
+   plus a "Custom..." option with From/To date-time pickers, via
+   Chart.js), plus current values and recent threshold breaches.
    Breaches are also logged to the dyno's console (`console.warn`).
    A dyno dropdown (populated from `/api/dynos`) filters the dyno-type
    charts down to one instance (`web.1`, `web.2`, ...) at a time; it has
    no effect on Postgres/Redis/Kafka charts, which aren't tied to a dyno.
    Longer ranges are downsampled server-side (time-bucketed averages,
    ~300 points per series) so a 90-day chart costs about the same to
-   query and render as a 15-minute one.
+   query and render as a 15-minute one. A custom range is capped at a
+   90-day span (matching the preset max) and, once applied, stays fixed
+   at that From/To window on subsequent 10s polls rather than sliding
+   forward with "now".
 
 Exact metric names/units vary by add-on and plan — the parser stores
 whatever `sample#key=value` pairs are present rather than hardcoding an
@@ -115,3 +119,9 @@ space than a quiet one — lower `RETENTION_DAYS` if that becomes an issue.
   nested-object parsing path isn't reachable here.
 - No push notifications (Slack/email) — the dashboard and dyno logs are
   the only alert surface, by design for this iteration.
+- If this app is scaled to 0 dynos (or otherwise unreachable) for an
+  extended period, Heroku can silently detach the HTTPS log drain on the
+  monitored app after repeated delivery failures. If dynos/metrics stop
+  updating after downtime, check `heroku drains -a <monitored-app>` and
+  re-add the drain (see "Deploying and wiring up the real log drain")
+  rather than assuming it's a code issue.

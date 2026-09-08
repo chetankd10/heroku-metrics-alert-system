@@ -28,9 +28,12 @@ router.get('/', (req, res) => {
   .resource-redis { color: #c53030; }
   .resource-kafka { color: #b7791f; }
   .empty { color: #888; font-style: italic; }
-  .range-controls { margin-bottom: 1rem; display: flex; gap: 1.5rem; align-items: center; }
+  .range-controls { margin-bottom: 1rem; display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }
   .range-controls label { font-size: 0.85rem; margin-right: 0.4rem; }
-  .range-controls select { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; }
+  .range-controls select, .range-controls input, .range-controls button { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; }
+  .range-controls button { background: #2b6cb0; color: #fff; border-color: #2b6cb0; cursor: pointer; }
+  #custom-range { display: none; gap: 0.75rem; align-items: center; }
+  #custom-range.active { display: flex; }
   #charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; }
   .chart-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem; }
   .chart-card h3 { margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600; }
@@ -52,7 +55,15 @@ router.get('/', (req, res) => {
         <option value="10080">7d</option>
         <option value="43200">30d</option>
         <option value="129600">90d</option>
+        <option value="custom">Custom&hellip;</option>
       </select>
+    </span>
+    <span id="custom-range">
+      <label for="custom-start">From</label>
+      <input type="datetime-local" id="custom-start">
+      <label for="custom-end">To</label>
+      <input type="datetime-local" id="custom-end">
+      <button id="custom-apply" type="button">Apply</button>
     </span>
     <span>
       <label for="dyno-select">Dyno</label>
@@ -141,6 +152,7 @@ async function refreshAlerts() {
 }
 
 let rangeMinutes = 60;
+let customRange = null; // { start: Date, end: Date } when the "Custom" range is active
 let dynoFilter = '';
 const charts = new Map(); // seriesKey -> Chart instance
 
@@ -175,7 +187,15 @@ async function refreshDynoOptions() {
 }
 
 async function refreshCharts() {
-  const params = new URLSearchParams({ minutes: String(rangeMinutes) });
+  const params = new URLSearchParams();
+  let effectiveMinutes = rangeMinutes;
+  if (customRange) {
+    params.set('start', customRange.start.toISOString());
+    params.set('end', customRange.end.toISOString());
+    effectiveMinutes = Math.round((customRange.end - customRange.start) / 60000);
+  } else {
+    params.set('minutes', String(rangeMinutes));
+  }
   if (dynoFilter) params.set('dyno', dynoFilter);
   const res = await fetch('/api/metrics/history?' + params.toString());
   const rows = await res.json();
@@ -187,7 +207,7 @@ async function refreshCharts() {
     const key = seriesKey(row);
     if (!grouped.has(key)) grouped.set(key, { row, labels: [], values: [] });
     const entry = grouped.get(key);
-    entry.labels.push(formatLabel(row.recorded_at, rangeMinutes));
+    entry.labels.push(formatLabel(row.recorded_at, effectiveMinutes));
     entry.values.push(row.metric_value);
   }
 
@@ -249,9 +269,42 @@ function cssSafe(key) {
 }
 
 document.getElementById('range-select').addEventListener('change', (e) => {
+  const customRangeEl = document.getElementById('custom-range');
+  if (e.target.value === 'custom') {
+    customRangeEl.classList.add('active');
+    if (!document.getElementById('custom-end').value) {
+      const now = new Date();
+      const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      document.getElementById('custom-end').value = toLocalInputValue(now);
+      document.getElementById('custom-start').value = toLocalInputValue(hourAgo);
+    }
+    return; // wait for "Apply" - the custom range isn't active until then
+  }
+  customRangeEl.classList.remove('active');
+  customRange = null;
   rangeMinutes = parseInt(e.target.value, 10);
   refreshCharts().catch(console.error);
 });
+
+document.getElementById('custom-apply').addEventListener('click', () => {
+  const startVal = document.getElementById('custom-start').value;
+  const endVal = document.getElementById('custom-end').value;
+  if (!startVal || !endVal) return;
+  const start = new Date(startVal);
+  const end = new Date(endVal);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+    alert('Enter a valid "From" time earlier than "To".');
+    return;
+  }
+  customRange = { start, end };
+  refreshCharts().catch(console.error);
+});
+
+function toLocalInputValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+    'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+}
 
 document.getElementById('dyno-select').addEventListener('change', (e) => {
   dynoFilter = e.target.value;

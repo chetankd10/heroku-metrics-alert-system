@@ -104,6 +104,31 @@ async function metricsSince(minutes, dynoSource) {
   return rows;
 }
 
+async function metricsBetween(startTime, endTime, dynoSource) {
+  const spanSeconds = Math.max(1, (endTime.getTime() - startTime.getTime()) / 1000);
+  const bucketSeconds = Math.max(1, Math.ceil(spanSeconds / TARGET_POINTS_PER_SERIES));
+  const params = [startTime, endTime, bucketSeconds];
+  let dynoClause = '';
+  if (dynoSource) {
+    params.push(dynoSource);
+    dynoClause = `AND (resource_type != 'dyno' OR source = $4)`;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT resource_type, source, metric_name, metric_unit,
+        to_timestamp(floor(extract(epoch FROM recorded_at) / $3) * $3) AS recorded_at,
+        avg(metric_value) AS metric_value
+     FROM metrics
+     WHERE recorded_at >= $1 AND recorded_at <= $2
+     ${dynoClause}
+     GROUP BY 1, 2, 3, 4, 5
+     ORDER BY 5 ASC
+     LIMIT 20000`,
+    params
+  );
+  return rows;
+}
+
 async function distinctDynoSources() {
   const { rows } = await pool.query(
     `SELECT DISTINCT source FROM metrics WHERE resource_type = 'dyno' ORDER BY source`
@@ -124,6 +149,7 @@ module.exports = {
   latestMetrics,
   recentAlerts,
   metricsSince,
+  metricsBetween,
   distinctDynoSources,
   pruneOldMetrics,
 };
