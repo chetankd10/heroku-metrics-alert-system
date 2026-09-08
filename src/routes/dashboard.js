@@ -72,9 +72,9 @@ router.get('/', (req, res) => {
       <button id="custom-apply" type="button">Apply</button>
     </span>
     <span>
-      <label for="dyno-select">Dyno</label>
-      <select id="dyno-select">
-        <option value="">All dynos</option>
+      <label for="source-select">Source</label>
+      <select id="source-select">
+        <option value="">All sources</option>
       </select>
     </span>
   </div>
@@ -166,7 +166,7 @@ async function refreshAlerts() {
 
 let rangeMinutes = 60;
 let customRange = null; // { start: Date, end: Date } when the "Custom" range is active
-let dynoFilter = '';
+let sourceFilter = '';
 let appFilter = '';
 const charts = new Map(); // seriesKey -> Chart instance
 
@@ -186,25 +186,42 @@ function formatLabel(recordedAt, minutes) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-async function refreshDynoOptions() {
+const RESOURCE_TYPE_LABELS = { dyno: 'Dyno', postgres: 'Postgres', redis: 'Redis', kafka: 'Kafka', other: 'Other' };
+
+function sourceOptionValue(s) {
+  return s.resourceType + '::' + s.source;
+}
+
+async function refreshSourceOptions() {
   const params = new URLSearchParams();
   if (appFilter) params.set('app', appFilter);
-  const res = await fetch('/api/dynos' + (appFilter ? '?' + params.toString() : ''));
-  const dynos = await res.json();
-  const select = document.getElementById('dyno-select');
-  const valid = new Set(['', ...dynos]);
-  // Drop options that don't belong to the currently selected app (e.g. after
-  // switching apps) so stale dyno names from a previous app don't linger.
-  for (const opt of Array.from(select.options)) {
-    if (!valid.has(opt.value)) opt.remove();
+  const res = await fetch('/api/sources' + (appFilter ? '?' + params.toString() : ''));
+  const sources = await res.json();
+  const select = document.getElementById('source-select');
+  const previousValue = select.value;
+
+  select.innerHTML = '';
+  select.appendChild(new Option('All sources', ''));
+
+  const byResourceType = new Map();
+  for (const s of sources) {
+    if (!byResourceType.has(s.resourceType)) byResourceType.set(s.resourceType, []);
+    byResourceType.get(s.resourceType).push(s);
   }
-  const existing = new Set(Array.from(select.options).map((o) => o.value));
-  for (const dyno of dynos) {
-    if (existing.has(dyno)) continue;
-    const opt = document.createElement('option');
-    opt.value = dyno;
-    opt.textContent = dyno;
-    select.appendChild(opt);
+  for (const [resourceType, list] of byResourceType) {
+    const group = document.createElement('optgroup');
+    group.label = RESOURCE_TYPE_LABELS[resourceType] || resourceType;
+    for (const s of list) group.appendChild(new Option(s.source, sourceOptionValue(s)));
+    select.appendChild(group);
+  }
+
+  // Preserve the current selection across rebuilds (e.g. on the 10s poll),
+  // but fall back to "All sources" if it no longer exists (e.g. after
+  // switching apps to one without that source).
+  if (Array.from(select.options).some((o) => o.value === previousValue)) {
+    select.value = previousValue;
+  } else {
+    sourceFilter = '';
   }
 }
 
@@ -261,7 +278,7 @@ async function refreshCharts() {
   } else {
     params.set('minutes', String(rangeMinutes));
   }
-  if (dynoFilter) params.set('dyno', dynoFilter);
+  if (sourceFilter) params.set('source', sourceFilter);
   if (appFilter) params.set('app', appFilter);
   const res = await fetch('/api/metrics/history?' + params.toString());
   const rows = await res.json();
@@ -385,15 +402,15 @@ function toLocalInputValue(date) {
     'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
 }
 
-document.getElementById('dyno-select').addEventListener('change', (e) => {
-  dynoFilter = e.target.value;
+document.getElementById('source-select').addEventListener('change', (e) => {
+  sourceFilter = e.target.value;
   refreshCharts().catch(console.error);
 });
 
 document.getElementById('app-select').addEventListener('change', (e) => {
   appFilter = e.target.value;
-  dynoFilter = ''; // dyno names from the previous app don't apply here
-  document.getElementById('dyno-select').value = '';
+  sourceFilter = ''; // sources from the previous app don't apply here
+  document.getElementById('source-select').value = '';
   refreshAll();
 });
 
@@ -401,7 +418,7 @@ function refreshAll() {
   refreshMetrics().catch(console.error);
   refreshAlerts().catch(console.error);
   refreshAppOptions().catch(console.error);
-  refreshDynoOptions().catch(console.error);
+  refreshSourceOptions().catch(console.error);
   refreshCharts().catch(console.error);
 }
 

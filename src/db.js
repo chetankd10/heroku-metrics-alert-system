@@ -95,15 +95,16 @@ async function recentAlerts(limit = 50, appName) {
 // render as a 15-minute one instead of shipping every raw row to the client.
 const TARGET_POINTS_PER_SERIES = 300;
 
-async function metricsSince(minutes, dynoSource, appName) {
+async function metricsSince(minutes, sourceFilter, appName) {
   const bucketSeconds = Math.max(1, Math.ceil((minutes * 60) / TARGET_POINTS_PER_SERIES));
   const params = [minutes, bucketSeconds];
   let clauses = '';
-  if (dynoSource) {
-    params.push(dynoSource);
-    // Only dyno-type rows are filtered by the selected dyno; other
-    // resource types (postgres/redis/kafka) aren't tied to a dyno instance.
-    clauses += ` AND (resource_type != 'dyno' OR source = $${params.length})`;
+  if (sourceFilter) {
+    params.push(sourceFilter.resourceType);
+    const resourceTypeIdx = params.length;
+    params.push(sourceFilter.source);
+    const sourceIdx = params.length;
+    clauses += ` AND resource_type = $${resourceTypeIdx} AND source = $${sourceIdx}`;
   }
   if (appName) {
     params.push(appName);
@@ -128,14 +129,17 @@ async function metricsSince(minutes, dynoSource, appName) {
   return rows;
 }
 
-async function metricsBetween(startTime, endTime, dynoSource, appName) {
+async function metricsBetween(startTime, endTime, sourceFilter, appName) {
   const spanSeconds = Math.max(1, (endTime.getTime() - startTime.getTime()) / 1000);
   const bucketSeconds = Math.max(1, Math.ceil(spanSeconds / TARGET_POINTS_PER_SERIES));
   const params = [startTime, endTime, bucketSeconds];
   let clauses = '';
-  if (dynoSource) {
-    params.push(dynoSource);
-    clauses += ` AND (resource_type != 'dyno' OR source = $${params.length})`;
+  if (sourceFilter) {
+    params.push(sourceFilter.resourceType);
+    const resourceTypeIdx = params.length;
+    params.push(sourceFilter.source);
+    const sourceIdx = params.length;
+    clauses += ` AND resource_type = $${resourceTypeIdx} AND source = $${sourceIdx}`;
   }
   if (appName) {
     params.push(appName);
@@ -157,18 +161,18 @@ async function metricsBetween(startTime, endTime, dynoSource, appName) {
   return rows;
 }
 
-async function distinctDynoSources(appName) {
+async function distinctSources(appName) {
   const params = [];
   let appClause = '';
   if (appName) {
     params.push(appName);
-    appClause = `AND app_name = $1`;
+    appClause = `WHERE app_name = $1`;
   }
   const { rows } = await pool.query(
-    `SELECT DISTINCT source FROM metrics WHERE resource_type = 'dyno' ${appClause} ORDER BY source`,
+    `SELECT DISTINCT resource_type, source FROM metrics ${appClause} ORDER BY resource_type, source`,
     params
   );
-  return rows.map((r) => r.source);
+  return rows.map((r) => ({ resourceType: r.resource_type, source: r.source }));
 }
 
 async function distinctAppNames() {
@@ -190,7 +194,7 @@ module.exports = {
   recentAlerts,
   metricsSince,
   metricsBetween,
-  distinctDynoSources,
+  distinctSources,
   distinctAppNames,
   pruneOldMetrics,
 };
