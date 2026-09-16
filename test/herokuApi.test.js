@@ -11,8 +11,8 @@ test('classifySpace identifies common, private, and shielded apps', () => {
 test('groupAppsByScope separates personal apps from team apps', () => {
   const apps = [
     { name: 'my-personal-app', team: null, space: null },
-    { name: 'cs-ecom', team: { name: 'growth-team' }, space: { shield: false } },
-    { name: 'cs-ecom-metrics-alerts', team: { name: 'growth-team' }, space: { shield: true } },
+    { name: 'cs-ecom', team: { name: 'growth-team' }, space: { shield: false, name: 'acme-prod' } },
+    { name: 'cs-ecom-metrics-alerts', team: { name: 'growth-team' }, space: { shield: true, name: 'acme-secure' } },
     { name: 'another-personal-app', team: null, space: null },
   ];
 
@@ -23,10 +23,10 @@ test('groupAppsByScope separates personal apps from team apps', () => {
     'growth-team': ['cs-ecom', 'cs-ecom-metrics-alerts'],
   });
   assert.deepStrictEqual(grouped.spaces, {
-    'my-personal-app': 'common',
-    'another-personal-app': 'common',
-    'cs-ecom': 'private',
-    'cs-ecom-metrics-alerts': 'shielded',
+    'my-personal-app': { type: 'common', name: null },
+    'another-personal-app': { type: 'common', name: null },
+    'cs-ecom': { type: 'private', name: 'acme-prod' },
+    'cs-ecom-metrics-alerts': { type: 'shielded', name: 'acme-secure' },
   });
 });
 
@@ -34,14 +34,14 @@ test('groupAppsByScope handles an all-personal or all-team list', () => {
   assert.deepStrictEqual(groupAppsByScope([{ name: 'solo-app', team: null, space: null }]), {
     personal: ['solo-app'],
     teams: {},
-    spaces: { 'solo-app': 'common' },
+    spaces: { 'solo-app': { type: 'common', name: null } },
   });
   assert.deepStrictEqual(
-    groupAppsByScope([{ name: 'team-app', team: { name: 'ops' }, space: { shield: true } }]),
+    groupAppsByScope([{ name: 'team-app', team: { name: 'ops' }, space: { shield: true, name: 'acme-secure' } }]),
     {
       personal: [],
       teams: { ops: ['team-app'] },
-      spaces: { 'team-app': 'shielded' },
+      spaces: { 'team-app': { type: 'shielded', name: 'acme-secure' } },
     }
   );
 });

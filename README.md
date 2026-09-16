@@ -107,9 +107,12 @@ apps at once:
    panel (charts, dyno list, latest metrics, alerts) to just that app;
    the default "All monitored apps" view shows everything together, with
    an "App" column on each table and series label.
-3. The **Space** dropdown (also requires `HEROKU_API_KEY`) narrows the
-   App dropdown to apps in Common Runtime, a Private Space, or a Shield
-   Private Space, based on each app's `space` field from the Heroku
+3. The **Space** dropdown (also requires `HEROKU_API_KEY`, and sits to the
+   left of the App dropdown since it narrows the App dropdown, not the
+   other way around) lists Common Runtime plus every individual Private
+   and Shield Private Space your apps live in, by name, grouped under
+   "Private Spaces" / "Shield Spaces" — not just the three broad
+   categories — based on each app's `space` field from the Heroku
    Platform API. It's disabled when `HEROKU_API_KEY` is unset, since
    space membership can't be determined without it. Filtering is
    per-app, not per-group — if none of your monitored/personal apps are

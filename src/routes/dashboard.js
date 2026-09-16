@@ -46,18 +46,15 @@ router.get('/', (req, res) => {
   <h2>Metric history</h2>
   <div class="range-controls">
     <span>
-      <label for="app-select">App</label>
-      <select id="app-select">
-        <option value="">All monitored apps</option>
-      </select>
-    </span>
-    <span>
       <label for="space-select">Space</label>
       <select id="space-select">
         <option value="">All spaces</option>
-        <option value="common">Common</option>
-        <option value="private">Private</option>
-        <option value="shielded">Shield</option>
+      </select>
+    </span>
+    <span>
+      <label for="app-select">App</label>
+      <select id="app-select">
+        <option value="">All monitored apps</option>
       </select>
     </span>
     <span>
@@ -178,7 +175,7 @@ let customRange = null; // { start: Date, end: Date } when the "Custom" range is
 let sourceFilter = '';
 let appFilter = '';
 let spaceFilter = '';
-let appSpaces = new Map(); // app name -> 'common' | 'private' | 'shielded', from Heroku API discovery
+let appSpaces = new Map(); // app name -> { type: 'common' | 'private' | 'shielded', name: string | null }, from Heroku API discovery
 const charts = new Map(); // seriesKey -> Chart instance
 
 function seriesKey(row) {
@@ -236,14 +233,56 @@ async function refreshSourceOptions() {
   }
 }
 
+// spaceFilter is '' (all), 'common', or a specific Private/Shield space name -
+// space names are unique per org, so no need to also carry the type.
 function matchesSpaceFilter(name) {
   if (!spaceFilter) return true;
-  return appSpaces.get(name) === spaceFilter;
+  const info = appSpaces.get(name);
+  if (!info) return false;
+  if (spaceFilter === 'common') return info.type === 'common';
+  return info.name === spaceFilter;
+}
+
+function rebuildSpaceOptions(spaceSelect, previousValue) {
+  spaceSelect.innerHTML = '';
+  spaceSelect.appendChild(new Option('All spaces', ''));
+
+  const privateNames = new Set();
+  const shieldedNames = new Set();
+  let hasCommon = false;
+  for (const info of appSpaces.values()) {
+    if (info.type === 'common') hasCommon = true;
+    else if (info.type === 'private' && info.name) privateNames.add(info.name);
+    else if (info.type === 'shielded' && info.name) shieldedNames.add(info.name);
+  }
+
+  if (hasCommon) spaceSelect.appendChild(new Option('Common', 'common'));
+
+  if (privateNames.size > 0) {
+    const group = document.createElement('optgroup');
+    group.label = 'Private Spaces';
+    for (const name of Array.from(privateNames).sort()) group.appendChild(new Option(name, name));
+    spaceSelect.appendChild(group);
+  }
+  if (shieldedNames.size > 0) {
+    const group = document.createElement('optgroup');
+    group.label = 'Shield Spaces';
+    for (const name of Array.from(shieldedNames).sort()) group.appendChild(new Option(name, name));
+    spaceSelect.appendChild(group);
+  }
+
+  if (Array.from(spaceSelect.options).some((o) => o.value === previousValue)) {
+    spaceSelect.value = previousValue;
+  } else {
+    spaceFilter = '';
+  }
 }
 
 async function refreshAppOptions() {
   const select = document.getElementById('app-select');
   const previousValue = select.value;
+  const spaceSelect = document.getElementById('space-select');
+  const previousSpaceValue = spaceSelect.value;
 
   const [monitoredApps, herokuApps] = await Promise.all([
     fetch('/api/apps').then((r) => r.json()).catch(() => []),
@@ -251,11 +290,13 @@ async function refreshAppOptions() {
   ]);
 
   appSpaces = new Map(Object.entries(herokuApps.spaces || {}));
-  const spaceSelect = document.getElementById('space-select');
   spaceSelect.disabled = !herokuApps.enabled;
   if (!herokuApps.enabled) {
     spaceFilter = '';
-    spaceSelect.value = '';
+    spaceSelect.innerHTML = '';
+    spaceSelect.appendChild(new Option('All spaces', ''));
+  } else {
+    rebuildSpaceOptions(spaceSelect, previousSpaceValue);
   }
 
   const monitored = new Set(monitoredApps);

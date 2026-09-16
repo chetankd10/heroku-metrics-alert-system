@@ -20,7 +20,7 @@ function groupAppsByScope(apps) {
   const spaces = {};
   for (const app of apps) {
     const teamName = app.team && app.team.name;
-    spaces[app.name] = classifySpace(app);
+    spaces[app.name] = { type: classifySpace(app), name: (app.space && app.space.name) || null };
     if (teamName) {
       if (!teams[teamName]) teams[teamName] = [];
       teams[teamName].push(app.name);
