@@ -72,14 +72,14 @@ router.get('/apps', async (req, res) => {
 router.get('/heroku/apps', async (req, res) => {
   const apiKey = process.env.HEROKU_API_KEY;
   if (!apiKey) {
-    return res.json({ enabled: false, personal: [], teams: {} });
+    return res.json({ enabled: false, personal: [], teams: {}, spaces: {} });
   }
   try {
     const grouped = await herokuApi.listAccessibleApps(apiKey);
     res.json({ enabled: true, ...grouped });
   } catch (err) {
     console.error('Heroku API app discovery failed:', err.message);
-    res.status(502).json({ enabled: true, error: 'discovery_failed', personal: [], teams: {} });
+    res.status(502).json({ enabled: true, error: 'discovery_failed', personal: [], teams: {}, spaces: {} });
   }
 });
 

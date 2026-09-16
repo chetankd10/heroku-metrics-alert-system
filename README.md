@@ -107,9 +107,15 @@ apps at once:
    panel (charts, dyno list, latest metrics, alerts) to just that app;
    the default "All monitored apps" view shows everything together, with
    an "App" column on each table and series label.
-3. To enable the "not monitored" discovery groups, set `HEROKU_API_KEY`
-   to a Heroku OAuth token. Mint one scoped to **read-only** so this
-   service can never modify any app, including ones it doesn't monitor:
+3. The **Space** dropdown (also requires `HEROKU_API_KEY`) narrows the
+   App dropdown to apps in Common Runtime, a Private Space, or a Shield
+   Private Space, based on each app's `space` field from the Heroku
+   Platform API. It's disabled when `HEROKU_API_KEY` is unset, since
+   space membership can't be determined without it.
+4. To enable the "not monitored" discovery groups and the Space filter,
+   set `HEROKU_API_KEY` to a Heroku OAuth token. Mint one scoped to
+   **read-only** so this service can never modify any app, including
+   ones it doesn't monitor:
    ```bash
    heroku authorizations:create --scope read -d "your-alert-system-app read-only API discovery"
    heroku config:set HEROKU_API_KEY=<token from the previous command> -a your-alert-system-app

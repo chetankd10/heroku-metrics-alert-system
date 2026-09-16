@@ -52,6 +52,15 @@ router.get('/', (req, res) => {
       </select>
     </span>
     <span>
+      <label for="space-select">Space</label>
+      <select id="space-select">
+        <option value="">All spaces</option>
+        <option value="common">Common</option>
+        <option value="private">Private</option>
+        <option value="shielded">Shield</option>
+      </select>
+    </span>
+    <span>
       <label for="range-select">Range</label>
       <select id="range-select">
         <option value="15">15m</option>
@@ -168,6 +177,8 @@ let rangeMinutes = 60;
 let customRange = null; // { start: Date, end: Date } when the "Custom" range is active
 let sourceFilter = '';
 let appFilter = '';
+let spaceFilter = '';
+let appSpaces = new Map(); // app name -> 'common' | 'private' | 'shielded', from Heroku API discovery
 const charts = new Map(); // seriesKey -> Chart instance
 
 function seriesKey(row) {
@@ -225,28 +236,42 @@ async function refreshSourceOptions() {
   }
 }
 
+function matchesSpaceFilter(name) {
+  if (!spaceFilter) return true;
+  return appSpaces.get(name) === spaceFilter;
+}
+
 async function refreshAppOptions() {
   const select = document.getElementById('app-select');
   const previousValue = select.value;
 
   const [monitoredApps, herokuApps] = await Promise.all([
     fetch('/api/apps').then((r) => r.json()).catch(() => []),
-    fetch('/api/heroku/apps').then((r) => r.json()).catch(() => ({ enabled: false, personal: [], teams: {} })),
+    fetch('/api/heroku/apps').then((r) => r.json()).catch(() => ({ enabled: false, personal: [], teams: {}, spaces: {} })),
   ]);
+
+  appSpaces = new Map(Object.entries(herokuApps.spaces || {}));
+  const spaceSelect = document.getElementById('space-select');
+  spaceSelect.disabled = !herokuApps.enabled;
+  if (!herokuApps.enabled) {
+    spaceFilter = '';
+    spaceSelect.value = '';
+  }
 
   const monitored = new Set(monitoredApps);
   select.innerHTML = '';
   select.appendChild(new Option('All monitored apps', ''));
 
-  if (monitoredApps.length > 0) {
+  const monitoredVisible = monitoredApps.filter(matchesSpaceFilter);
+  if (monitoredVisible.length > 0) {
     const group = document.createElement('optgroup');
     group.label = 'Monitored';
-    for (const name of monitoredApps) group.appendChild(new Option(name, name));
+    for (const name of monitoredVisible) group.appendChild(new Option(name, name));
     select.appendChild(group);
   }
 
   if (herokuApps.enabled) {
-    const personalUnmonitored = (herokuApps.personal || []).filter((name) => !monitored.has(name));
+    const personalUnmonitored = (herokuApps.personal || []).filter((name) => !monitored.has(name) && matchesSpaceFilter(name));
     if (personalUnmonitored.length > 0) {
       const group = document.createElement('optgroup');
       group.label = 'Personal (not monitored)';
@@ -254,7 +279,7 @@ async function refreshAppOptions() {
       select.appendChild(group);
     }
     for (const [teamName, apps] of Object.entries(herokuApps.teams || {})) {
-      const unmonitored = apps.filter((name) => !monitored.has(name));
+      const unmonitored = apps.filter((name) => !monitored.has(name) && matchesSpaceFilter(name));
       if (unmonitored.length === 0) continue;
       const group = document.createElement('optgroup');
       group.label = 'Team: ' + teamName + ' (not monitored)';
@@ -405,6 +430,11 @@ function toLocalInputValue(date) {
 document.getElementById('source-select').addEventListener('change', (e) => {
   sourceFilter = e.target.value;
   refreshCharts().catch(console.error);
+});
+
+document.getElementById('space-select').addEventListener('change', (e) => {
+  spaceFilter = e.target.value;
+  refreshAppOptions().catch(console.error);
 });
 
 document.getElementById('app-select').addEventListener('change', (e) => {
