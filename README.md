@@ -111,8 +111,25 @@ apps at once:
    App dropdown to apps in Common Runtime, a Private Space, or a Shield
    Private Space, based on each app's `space` field from the Heroku
    Platform API. It's disabled when `HEROKU_API_KEY` is unset, since
-   space membership can't be determined without it.
-4. To enable the "not monitored" discovery groups and the Space filter,
+   space membership can't be determined without it. Filtering is
+   per-app, not per-group — if none of your monitored/personal apps are
+   in the selected space, the "Monitored" and "Personal" groups just
+   disappear and only matching "Team: ... (not monitored)" apps remain,
+   which can be a long list in orgs with many private-space apps.
+4. This service does **not** need to be deployed inside a Private Space
+   or Shield Private Space to monitor apps that live in one. Metrics
+   flow *out* of the monitored app via the log drain (an outbound HTTPS
+   POST the monitored app makes to this service), and Private/Shield
+   Space dynos allow outbound internet access by default — nothing
+   here needs to reach *into* the monitored app's private network.
+   Space discovery (`HEROKU_API_KEY`) is a separate, unrelated call to
+   Heroku's public Platform API (`api.heroku.com`), which also works
+   the same regardless of where this service is hosted. The only
+   exception is an org that has explicitly locked down egress on its
+   private-space apps (e.g. via Space Firewall rules) to just its own
+   space — that's an intentional, non-default network policy, and
+   would need its own exception for this service's drain URL.
+5. To enable the "not monitored" discovery groups and the Space filter,
    set `HEROKU_API_KEY` to a Heroku OAuth token. Mint one scoped to
    **read-only** so this service can never modify any app, including
    ones it doesn't monitor:
