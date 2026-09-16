@@ -3,7 +3,7 @@
 Monitors dyno, Postgres, Redis, and Kafka metrics for one or more Heroku
 apps by receiving each app's log drain, parsing the `sample#key=value`
 metric lines Heroku and its add-ons emit, storing them in Postgres, and
-raising threshold alerts on a dashboard.
+raising threshold alerts on a dashboard .
 
 ## How it works
 
